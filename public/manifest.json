@@ -1,0 +1,8 @@
+{
+  "short_name": "Bora Bora",
+  "name": "Bora Bora · Gestión de Reservas",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#09090f",
+  "theme_color": "#09090f"
+}
