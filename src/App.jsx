@@ -1,4 +1,4 @@
-	import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 
 // ═══════════════════════════════════════════════════════════
 // QR CODE — generador puro en JS (sin dependencias externas)
@@ -188,6 +188,7 @@ function encodeTextToModules(text) {
 }
 
 
+const MESAS_LIST = ["Palco VIP","Mesa VIP","General"];
 const HORAS = ["19:00","19:30","20:00","20:30","21:00","21:30","22:00","22:30","23:00","23:30","00:00","00:30","01:00","01:30","02:00"];
 
 function uid() { return Date.now().toString(36)+Math.random().toString(36).slice(2); }
@@ -399,9 +400,6 @@ function Login({ promotores, onLogin }) {
             <button onClick={()=>{setModo("");setError("");setUsuario("");setClave("");}}
               style={{ ...S.btnG,width:"100%",padding:"11px",textAlign:"center",fontSize:13 }}>← Volver</button>
             <div style={{ color:"#3a3a60",fontSize:11,textAlign:"center" }}>
-              {modo==="admin"&&"Clave: admin123"}
-              {modo==="host"&&"Clave: host123"}
-              {modo==="promotor"&&"Ej: «carlos» · «1111»"}
             </div>
           </div>
         )}
@@ -422,7 +420,7 @@ function AdminView({ db, onSalir }) {
   const [linkModal, setLinkModal]= useState(null);
   const [showReset, setShowReset]= useState(false);
 
-  const TABS=[{id:"reservas",e:"🎟",l:"Reservas"},{id:"promotores",e:"👥",l:"Promotores"},{id:"liquidacion",e:"💰",l:"Liquidación"},{id:"paquetes",e:"📦",l:"Paquetes"}];
+  const TABS=[{id:"reservas",e:"🎟",l:"Reservas"},{id:"promotores",e:"👥",l:"Promotores"},{id:"liquidacion",e:"💰",l:"Liquidación"},{id:"paquetes",e:"📦",l:"Paquetes"},{id:"reportes",e:"📊",l:"Reportes"}];
 
   function resetTodo() {
     ["nocturno_reservas","nocturno_promotores","nocturno_paquetes"].forEach(k=>localStorage.removeItem(k));
@@ -439,6 +437,7 @@ function AdminView({ db, onSalir }) {
         {tab==="promotores"  && <TabPromotores  db={db} onNew={()=>setShowNP(true)} onLinkModal={setLinkModal}/>}
         {tab==="liquidacion" && <TabLiquidacion db={db} onLinkModal={setLinkModal}/>}
         {tab==="paquetes"    && <TabPaquetes    db={db} onNew={()=>setShowPaq(true)}/>}
+        {tab==="reportes"    && <TabReportes    db={db}/>}
       </div>
       {editR   && <ModalEditR    db={db} r={editR} setR={setEditR} onSave={r=>{db.saveReserva(r);setEditR(null);}} onClose={()=>setEditR(null)} esAdmin/>}
       {showNR  && <ModalNuevaR   db={db} defaultPid={db.promotores[0]?.id} onSave={r=>{db.addReserva(r);setShowNR(false);}} onClose={()=>setShowNR(false)} esAdmin/>}
@@ -1625,6 +1624,132 @@ function TabLiquidacion({ db, onLinkModal }) {
     })}
 
     <ModalFactura facturaVer={facturaVer} onClose={()=>setFacturaVer(null)} />
+  </>);
+}
+
+// ── Tab Reportes ──────────────────────────────────────────
+function TabReportes({ db }) {
+  const { reservas, promotores, paquetes } = db;
+  const [mesSelec, setMesSelec] = useState("");
+
+  // Meses disponibles
+  const meses = [...new Set(reservas.map(r=>r.fecha?.slice(0,7)))].sort().reverse();
+
+  function exportarCSV(datos, nombre) {
+    if (!datos.length) return;
+    const headers = Object.keys(datos[0]);
+    const rows = datos.map(r => headers.map(h => `"${(r[h]??'').toString().replace(/"/g,'""')}"`).join(","));
+    const csv = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob(["\uFEFF"+csv], {type:"text/csv;charset=utf-8;"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${nombre}.csv`;
+    a.click();
+  }
+
+  function exportarReservas(filtro) {
+    const lista = filtro ? reservas.filter(r=>r.fecha?.startsWith(filtro)) : reservas;
+    const datos = lista.map(r => {
+      const p = promotores.find(x=>x.id===r.promotorId);
+      const pk = paquetes.find(x=>x.id===r.paqueteId);
+      return {
+        "Fecha": r.fecha,
+        "Hora": r.hora,
+        "Cliente": r.nombre,
+        "Teléfono": r.tel,
+        "Mesa": r.mesa,
+        "Personas": r.personas,
+        "Promotor": p?.nombre||"",
+        "Paquete": pk?.nombre||"Sin paquete",
+        "Consumo Mín": r.consumoMin,
+        "Venta Real": r.ventas||0,
+        "Estado": r.estado,
+        "Asistencia": r.asistencia,
+        "Comisión Pagada": r.comisionPagada?"Sí":"No",
+        "Notas": r.notas||""
+      };
+    });
+    exportarCSV(datos, `reservas${filtro?`_${filtro}`:"_completo"}`);
+  }
+
+  function exportarComisiones(filtro) {
+    const lista = filtro ? reservas.filter(r=>r.fecha?.startsWith(filtro)) : reservas;
+    const datos = promotores.map(p => {
+      const misR = lista.filter(r=>r.promotorId===p.id&&r.asistencia==="llegó");
+      const calcCom = r => {
+        const pk = paquetes.find(x=>x.id===r.paqueteId);
+        return pk ? pk.precio*(pk.comisionPct/100) : (r.ventas||r.consumoMin)*(p.comisionPct/100);
+      };
+      const totalCom = misR.reduce((s,r)=>s+calcCom(r),0);
+      const pagado   = misR.filter(r=>r.comisionPagada).reduce((s,r)=>s+calcCom(r),0);
+      const pendiente = totalCom - pagado;
+      return {
+        "Promotor": p.nombre,
+        "Usuario": p.usuario,
+        "Teléfono": p.tel||"",
+        "Comisión %": p.comisionPct,
+        "Reservas": lista.filter(r=>r.promotorId===p.id).length,
+        "Llegaron": misR.length,
+        "Total Comisión": Math.round(totalCom),
+        "Ya Pagado": Math.round(pagado),
+        "Pendiente": Math.round(pendiente)
+      };
+    });
+    exportarCSV(datos, `comisiones${filtro?`_${filtro}`:"_completo"}`);
+  }
+
+  // Stats rápidas
+  const listaFiltrada = mesSelec ? reservas.filter(r=>r.fecha?.startsWith(mesSelec)) : reservas;
+  const totalVentas = listaFiltrada.reduce((s,r)=>{
+    const pk=paquetes.find(x=>x.id===r.paqueteId);
+    return s+(pk?pk.precio:(r.ventas||0));
+  },0);
+  const llegaron = listaFiltrada.filter(r=>r.asistencia==="llegó").length;
+
+  return (<>
+    <div style={{ marginBottom:16 }}>
+      <div style={{ fontSize:20,fontWeight:800,color:"#f0e0ff" }}>📊 Reportes</div>
+      <div style={{ color:"#5a5a80",fontSize:12 }}>Exporta a Excel / CSV</div>
+    </div>
+
+    {/* Filtro mes */}
+    <Field label="FILTRAR POR MES">
+      <select style={S.inp} value={mesSelec} onChange={e=>setMesSelec(e.target.value)}>
+        <option value="">— Todos los meses —</option>
+        {meses.map(m=><option key={m} value={m}>{m}</option>)}
+      </select>
+    </Field>
+
+    {/* Stats rápidas */}
+    <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,margin:"16px 0" }}>
+      {[
+        {l:"Reservas",v:listaFiltrada.length,c:"#b46eff"},
+        {l:"Llegaron",v:llegaron,c:"#42f5a7"},
+        {l:"Ventas",v:fmt(totalVentas),c:"#42c8f5",sm:true},
+      ].map(s=>(
+        <div key={s.l} style={{ background:"#111120",border:"1px solid #1e1e32",borderRadius:12,padding:"12px 8px",textAlign:"center" }}>
+          <div style={{ fontSize:s.sm?13:22,fontWeight:900,color:s.c }}>{s.v}</div>
+          <div style={{ fontSize:9,color:"#5a5a80",fontWeight:700,marginTop:2 }}>{s.l.toUpperCase()}</div>
+        </div>
+      ))}
+    </div>
+
+    {/* Botones exportar */}
+    <div style={{ display:"flex",flexDirection:"column",gap:10,marginTop:8 }}>
+      <button onClick={()=>exportarReservas(mesSelec)}
+        style={{ background:"linear-gradient(135deg,#1a5e20,#2e7d32)",color:"#fff",border:"none",borderRadius:12,padding:"16px",fontWeight:800,cursor:"pointer",fontSize:15,textAlign:"center" }}>
+        📥 Exportar Reservas {mesSelec?`(${mesSelec})`:"(Todas)"} — Excel/CSV
+      </button>
+
+      <button onClick={()=>exportarComisiones(mesSelec)}
+        style={{ background:"linear-gradient(135deg,#1a3a5e,#1565c0)",color:"#fff",border:"none",borderRadius:12,padding:"16px",fontWeight:800,cursor:"pointer",fontSize:15,textAlign:"center" }}>
+        📥 Exportar Comisiones {mesSelec?`(${mesSelec})`:"(Todas)"} — Excel/CSV
+      </button>
+    </div>
+
+    <div style={{ marginTop:16,background:"#0d0d1a",borderRadius:10,padding:"12px 14px",fontSize:12,color:"#6060a0",lineHeight:1.7 }}>
+      💡 Los archivos CSV se abren directamente en Excel. Si los caracteres especiales no se ven bien, abre Excel → Datos → Desde texto/CSV y selecciona UTF-8.
+    </div>
   </>);
 }
 
